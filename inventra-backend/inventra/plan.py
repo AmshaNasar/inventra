@@ -11,7 +11,7 @@ from . import candidates as cand
 from .engine import Engine, SimResult
 
 ACTIVE = ("Approved", "Overridden")  # decisions that lock their allocation
-PLAN_TYPES = ("transfer", "reorder", "bring_forward", "reduce_inbound", "delay_inbound")
+PLAN_TYPES = ("transfer", "reorder", "bring_forward", "reduce_inbound", "delay_inbound", "discount")
 
 
 def approved_by_sku(decisions: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:

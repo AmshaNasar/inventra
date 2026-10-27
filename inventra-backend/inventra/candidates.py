@@ -33,6 +33,8 @@ def label(eng: Engine, d: Dict[str, Any]) -> str:
         return f"Wait for {d['po_id']}"
     if t == "flag_clearance":
         return f"Flag {d['sku']} at {d['location']} for clearance"
+    if t == "discount":
+        return f"Discount {d['units']} oldest units at {d['location']} by {d['depth_pct']:g}%"
     return "Do nothing"
 
 
@@ -49,6 +51,8 @@ def lead_of(eng: Engine, d: Dict[str, Any]) -> Optional[int]:
     if t == "bring_forward":
         a = next((x for x in eng.inbound(d["sku"], "likely", [d]) if x["po_id"] == d["po_id"]), None)
         return a["day"] if a else None
+    if t == "discount":
+        return 1
     return None
 
 

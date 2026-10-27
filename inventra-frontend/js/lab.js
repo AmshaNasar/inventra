@@ -3,216 +3,6 @@
    decisions, evaluation, assistant drawer, boot
    ===================================================================== */
 
-/* ================= SCENARIO LAB (decision tree, S1 to S9) ================= */
-let LAB = {key:null, tree:null, treeAt:null, sel:null, cmp:[], b:{type:'transfer'}, msg:null, qbusy:false, filled:false, question:null, parsedAssumptions:null, bp:{}, loading:false};
-let TREES = {};
-try { TREES = JSON.parse(localStorage.getItem('inventra-trees') || '{}'); } catch (e) {}
-const saveTrees = () => { try { localStorage.setItem('inventra-trees', JSON.stringify(TREES)); } catch (e) {} };
-function labKey(){
-  if (!LAB.key || !CELL[LAB.key]){ const r = S.plan.queue.find(x => x.trigger === 'shortage_or_breach') || S.plan.queue[0]; LAB.key = r ? key(r.sku, r.location) : 'CHG-01|Abu Dhabi'; }
-  return LAB.key;
-}
-async function loadTree(){
-  if (LAB.loading) return;
-  const k = labKey(), [sku, loc] = k.split('|');
-  LAB.loading = true; busy('Building the decision tree on the server…');
-  try {
-    let t = null;
-    if (TREES[k]){ try { t = await api(`/scenario/trees/${encodeURIComponent(TREES[k])}`); } catch (e) { if (!(e instanceof ApiError && e.status === 404)) throw e; } }
-    if (!t){ t = await api('/scenario/trees', {method:'POST', body:{sku, location:loc}}); TREES[k] = t.tree_id; saveTrees(); }
-    LAB.tree = t; LAB.treeAt = S.loadedAt;
-    if (!t.nodes.find(n => n.node_id === LAB.sel)) LAB.sel = (t.nodes.find(n => n.source === 'Suggested') || t.nodes[0]).node_id;
-    if (!LAB.b.parent || !t.nodes.find(n => n.node_id === LAB.b.parent)) LAB.b.parent = LAB.sel;
-    if (LAB.pendingBuilder){ Object.assign(LAB.b, LAB.pendingBuilder); LAB.pendingBuilder = null; LAB.b.parent = t.nodes.find(n => !n.parent_id).node_id; }
-  } catch (e) { LAB.tree = {error: errMsg(e)}; }
-  finally { LAB.loading = false; unbusy(); if (CURRENT === 'lab') render('lab', true); }
-}
-async function refreshTree(){ LAB.tree = null; await loadTree(); }
-function openLab(k, opts){
-  if (!k) k = labKey();
-  if (k !== LAB.key){ LAB.tree = null; LAB.cmp = []; LAB.sel = null; LAB.bp = {}; }
-  LAB.key = k; LAB.msg = null;
-  const [sku, loc] = k.split('|');
-  if (opts && opts.builder) LAB.pendingBuilder = opts.builder;
-  else LAB.b = {type:'transfer', sku, to:loc, from:LOCS.find(l => l.id !== loc).id, qty:50};
-  closePilot(); go('lab');
-}
-const nodeById = id => LAB.tree.nodes.find(n => n.node_id === id);
-const nodePath = id => (nodeById(id) || {path_ids:[]}).path_ids.map(nodeById);
-function nodeBreach(res, loc){ return sum(Object.values(res.per_sku || {}).map(p => (p.results.buffer_breach_days || {})[loc] || 0)); }
-function nodeCost(res){ return sum(Object.values(res.per_sku || {}).map(p => (p.results.transfer_cost_aed || 0) + (p.results.expedite_cost_aed || 0))); }
-function nodeCard(n, depth){
-  const res = n.results || {}, t = res.totals || {}, root = !n.parent_id, sel = LAB.sel === n.node_id, cmp = LAB.cmp.includes(n.node_id);
-  const failsRule = !root && res.rule && !res.rule.passes;
-  return `<div class="tnode ${sel ? 'sel' : ''} ${root ? 'root' : ''}" style="--dep:${depth}" onclick="if(!event.target.closest('input,button')){LAB.sel=${jsq(n.node_id)};LAB.b.parent=${jsq(n.node_id)};render('lab',true)}">
-    <div class="tn-h"><span class="tn-src ${esc(n.source)}">${esc(n.source)}</span><b>${esc(n.label)}</b>${root ? '' : robTag(n.robustness)}${failsRule ? '<span class="tag bad">fails rule</span>' : ''}<span class="sp1"></span>${root ? '' : `<label class="cmpk" title="Compare"><input type="checkbox" ${cmp ? 'checked' : ''} onchange="toggleCmp(${jsq(n.node_id)})"> compare</label>`}</div>
-    <div class="tn-m"><span>${root ? 'Reference' : `<b class="${t.net_vs_do_nothing_aed >= 0 ? '' : 'down'}">${sgn(t.net_vs_do_nothing_aed)}</b> vs Do nothing`}</span>${root ? '' : `<span>${sgn(t.net_vs_parent_aed)} vs parent</span>`}<span>${fmt(t.lost_sales)} lost</span><span>${sum(LOCS.map(l => nodeBreach(res, l.id)))} breach days</span>${root ? '' : `<span>${aed(nodeCost(res))} cost</span>`}</div>
-    ${(res.flags || []).length ? `<div class="tn-n">${res.flags.map(esc).join('<br>')}</div>` : ''}
-    ${n.question_text ? `<div class="tn-n">“${esc(n.question_text)}”</div>` : ''}
-  </div>`;
-}
-function treeHTML(){
-  const out = [], walk = (n, d) => { out.push(nodeCard(n, d)); LAB.tree.nodes.filter(x => x.parent_id === n.node_id).forEach(c => walk(c, d + 1)); };
-  walk(LAB.tree.nodes.find(n => !n.parent_id), 0);
-  return out.join('');
-}
-function toggleCmp(id){ LAB.cmp = LAB.cmp.includes(id) ? LAB.cmp.filter(x => x !== id) : [...LAB.cmp, id].slice(-2); render('lab', true); }
-function outputsTable(ids){
-  const cols = ids.map(nodeById).filter(Boolean);
-  const row = (label, f) => `<tr><td>${label}</td>${cols.map(n => `<td class="r">${f(n.results || {}, n)}</td>`).join('')}</tr>`;
-  return `<table class="out-t"><thead><tr><th></th>${cols.map(n => `<th class="r">${esc(n.label)}</th>`).join('')}</tr></thead><tbody>
-    ${row('Units sold', r => fmt(r.totals.units_sold))}${row('Lost sales', r => fmt(r.totals.lost_sales))}
-    ${LOCS.map(l => row(`Buffer-breach days · ${l.name}`, r => nodeBreach(r, l.id))).join('')}
-    ${row('Excess units, day 30', r => fmt(r.totals.excess_units))}${row('Aged units, day 30', r => fmt(r.totals.aged_units))}
-    ${row('Holding cost', r => aed(r.totals.holding_cost_aed))}${row('Transfer and expedite cost', r => aed(nodeCost(r)))}
-    ${row('Net benefit vs Do nothing', (r, n) => n.parent_id ? `<b>${sgn(r.totals.net_vs_do_nothing_aed)}</b>` : '—')}${row('Added vs parent', (r, n) => n.parent_id ? sgn(r.totals.net_vs_parent_aed) : '—')}
-    ${row('Robustness', r => r.robustness || '—')}${row('Recommendation rule', (r, n) => !n.parent_id ? '—' : r.rule.passes ? 'passes' : esc(r.rule.failing_checks[0] || 'fails'))}
-  </tbody></table>`;
-}
-function builderHTML(){
-  const [sku, loc] = labKey().split('|'), b = LAB.b;
-  const pos = []; S.stock.filter(r => r.sku === sku).forEach(r => r.incoming.forEach(p => pos.push({...p, location:r.location})));
-  const locSel = (k, v) => `<select class="sel" id="bd-${k}" onchange="LAB.b.${k}=this.value">${LOCS.map(l => `<option value="${esc(l.id)}" ${v === l.id ? 'selected' : ''}>${l.name}</option>`).join('')}</select>`;
-  const num = (k, v, lab) => `<label class="bf"><span>${lab}</span><input type="number" id="bd-${k}" value="${v ?? ''}" oninput="LAB.b.${k}=+this.value"></label>`;
-  const poSel = () => `<select class="sel" id="bd-po" onchange="LAB.b.po_id=this.value">${pos.map(p => `<option value="${esc(p.po_id)}" ${b.po_id === p.po_id ? 'selected' : ''}>${esc(p.po_id)} · ${p.qty} → ${esc(locName(p.location))} · ${esc(p.status)}</option>`).join('') || '<option value="">no inbound order</option>'}</select>`;
-  if (['bring_forward','delay_inbound','reduce_inbound'].includes(b.type) && !b.po_id && pos[0]) b.po_id = pos[0].po_id;
-  let fields = '';
-  if (b.type === 'transfer') fields = `<label class="bf"><span>From</span>${locSel('from', b.from)}</label><label class="bf"><span>To</span>${locSel('to', b.to || loc)}</label>${num('qty', b.qty, 'Units')}`;
-  if (b.type === 'reorder') fields = `<label class="bf"><span>For</span>${locSel('location', b.location || loc)}</label>${num('qty', b.qty, 'Units')}${num('order_day', b.order_day, 'Order on plan day (blank = order-by)')}`;
-  if (b.type === 'bring_forward') fields = `<label class="bf"><span>Order</span>${poSel()}</label>${num('days', b.days, 'Days (blank = PO expedite days)')}`;
-  if (b.type === 'delay_inbound') fields = `<label class="bf"><span>Order</span>${poSel()}</label>${num('days', b.days ?? 14, 'Days')}`;
-  if (b.type === 'reduce_inbound') fields = `<label class="bf"><span>Order</span>${poSel()}</label>${num('new_qty', b.new_qty, 'New quantity')}`;
-  if (b.type === 'wait') fields = `<label class="bf"><span>At</span>${locSel('location', b.location || loc)}</label>`;
-  return `<div class="builder ${LAB.filled ? 'filled' : ''}">
-    <label class="bf"><span>Add under</span><select class="sel" onchange="LAB.b.parent=this.value">${LAB.tree.nodes.map(n => `<option value="${esc(n.node_id)}" ${b.parent === n.node_id ? 'selected' : ''}>${esc(n.label)}</option>`).join('')}</select></label>
-    <label class="bf"><span>Decision</span><select class="sel" onchange="LAB.b.type=this.value;LAB.filled=false;render('lab',true)">${[['transfer','Transfer (one leg; stack legs for a split)'],['reorder','Reorder'],['bring_forward','Bring an inbound order forward'],['delay_inbound','Delay an inbound order'],['reduce_inbound','Reduce an inbound order'],['wait','Wait for inbound']].map(([v, l]) => `<option value="${v}" ${b.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-    ${fields}
-    <button class="btn sm acc" onclick="runBuilder()">${IC.plus} Run</button>
-  </div>`;
-}
-function builderPayload(){
-  const [sku, loc] = labKey().split('|'), b = LAB.b, d = {type:b.type, sku};
-  if (b.type === 'transfer'){ if (b.legs && b.legs.length){ d.legs = b.legs; d.type = 'split'; } else { d.from = b.from; d.to = b.to || loc; d.qty = +b.qty; } }
-  if (b.type === 'reorder'){ d.location = b.location || loc; d.qty = +b.qty; if (b.order_day !== undefined && b.order_day !== null && b.order_day !== '' && !Number.isNaN(+b.order_day)) d.order_day = +b.order_day; }
-  if (['bring_forward','delay_inbound','reduce_inbound'].includes(b.type)){ d.po_id = b.po_id; if (b.type !== 'reduce_inbound' && b.days) d.days = +b.days; if (b.type === 'reduce_inbound') d.new_qty = +b.new_qty; }
-  if (b.type === 'wait'){ d.location = b.location || loc; }
-  return d;
-}
-async function runBuilder(){
-  const decision = builderPayload(), tid = LAB.tree.tree_id;
-  busy('Simulating the new node (9 demand and delay cases)…');
-  try {
-    if (LAB.parsedAssumptions){ await api(`/scenario/trees/${encodeURIComponent(tid)}/assumptions`, {method:'PATCH', body:LAB.parsedAssumptions}); LAB.parsedAssumptions = null; }
-    const n = await api(`/scenario/trees/${encodeURIComponent(tid)}/nodes`, {method:'POST', body:{parent_id:LAB.b.parent || LAB.tree.nodes[0].node_id, decision, source: LAB.filled ? 'Question' : 'Controls', question_text: LAB.filled ? LAB.question : null}});
-    LAB.sel = n.node_id; LAB.b.parent = n.node_id; LAB.filled = false; LAB.question = null; LAB.msg = null;
-    LAB.tree = await api(`/scenario/trees/${encodeURIComponent(tid)}`); LAB.treeAt = S.loadedAt;
-  } catch (e) { LAB.msg = {bad:true, text:esc(errMsg(e))}; }
-  finally { unbusy(); render('lab', true); }
-}
-async function setAssume(patch){
-  busy('Recomputing every node under the new assumptions…');
-  try { LAB.tree = await api(`/scenario/trees/${encodeURIComponent(LAB.tree.tree_id)}/assumptions`, {method:'PATCH', body:patch}); LAB.treeAt = S.loadedAt; }
-  catch (e) { toast(errMsg(e)); }
-  finally { unbusy(); render('lab', true); }
-}
-function sigCase(id, kind, c){
-  const s = S.signals.find(x => x.signal_id === id), cur = {...(LAB.tree.assumptions.signals || {})};
-  cur[id] = {...(cur[id] || {}), [kind + '_likely']: s[kind + '_' + c]};
-  setAssume({signals:cur});
-}
-function sigToggle(id, on){ const cur = {...(LAB.tree.assumptions.signals || {})}; cur[id] = {...(cur[id] || {}), include:on}; setAssume({signals:cur}); }
-function sandboxFree(sku, loc, free){
-  const r = CELL[key(sku, loc)].stock, list = (LAB.tree.assumptions.stock_corrections || []).filter(x => !(x.sku === sku && x.location === loc));
-  if (+free !== r.free.value) list.push({sku, location:loc, available:+free + r.reserved.value, reserved:r.reserved.value});
-  setAssume({stock_corrections:list});
-}
-async function askWhatIf(q){
-  if (!q || !q.trim()) return;
-  if (!keyed()){ LAB.msg = {bad:true, text:'Typed questions need the backend LLM. Use the builder controls below.'}; render('lab', true); return; }
-  if (!LAB.tree || LAB.tree.error){ await loadTree(); if (!LAB.tree || LAB.tree.error) return; }
-  LAB.qbusy = true; LAB.msg = {text:'Translating your question into builder fields…'}; if (CURRENT === 'lab') render('lab', true);
-  let r = null;
-  try { r = await api('/scenario/parse', {method:'POST', body:{tree_id:LAB.tree.tree_id, question:q}}); }
-  catch (e) { LAB.qbusy = false; LAB.msg = {bad:true, text:`${esc(errMsg(e))} Nothing ran.`}; if (CURRENT === 'lab') render('lab', true); return; }
-  LAB.qbusy = false;
-  if (!r.supported){ LAB.msg = {bad:true, text:`${esc(r.message)}. Missing: ${esc(r.missing_input)}.`}; if (CURRENT === 'lab') render('lab', true); return; }
-  const d = r.builder.decision;
-  const dest = d.to || d.location || (d.legs && d.legs[0] && d.legs[0].to) || (d.po_id ? (S.stock.find(x => x.incoming.some(p => p.po_id === d.po_id)) || {}).location : null) || labKey().split('|')[1];
-  const nk = key(d.sku, dest);
-  const b = {type: d.type === 'split' ? 'transfer' : d.type, sku:d.sku, from:d.from, to:d.to, qty:d.qty, legs:d.legs, location:d.location, order_day:d.order_day, po_id:d.po_id, days:d.days, new_qty:d.new_qty};
-  LAB.filled = true; LAB.question = r.question_text; LAB.parsedAssumptions = r.builder.assumptions || null;
-  LAB.msg = {text:`Filled the builder from your question${nk !== labKey() ? `, on the ${esc(d.sku)} → ${esc(locName(dest))} tree` : ''}${LAB.parsedAssumptions ? ', including tree-wide assumptions applied when you press Run' : ''}. Check the fields, then press Run. Nothing has run.`};
-  if (nk !== labKey()){ const msg = LAB.msg, fq = LAB.question, pa = LAB.parsedAssumptions; openLab(nk, {builder:b}); LAB.msg = msg; LAB.filled = true; LAB.question = fq; LAB.parsedAssumptions = pa; }
-  else { Object.assign(LAB.b, b, {parent:LAB.sel}); if (CURRENT !== 'lab') go('lab'); else render('lab', true); }
-}
-function viewLab(){
-  const k = labKey(), [sku, loc] = k.split('|'), c = CELL[k], r = recOf(k);
-  const opts = [...new Set([k, ...RECS.map(x => x.key)])];
-  const head = `<div class="card rv" style="--d:.04s"><div class="row" style="justify-content:space-between;gap:14px">
-    <div class="row" style="gap:12px"><span class="lbl">Tree</span><select class="sel" aria-label="SKU and location" onchange="openLab(this.value)">${opts.map(x => { const rr = recOf(x); return `<option value="${esc(x)}" ${x === k ? 'selected' : ''}>${esc(x.replace('|', ' → '))}${rr ? ' · ' + rr.urgency + (rr.top ? '' : ' · no option passes') : ''}</option>`; }).join('')}</select>${r ? urgTag(r.urgency) : ''}<span class="cellb st-${stCls(c.plan.status)}" style="display:inline-flex;min-width:0;padding:3px 8px 3px 10px">${esc(c.plan.status)}</span></div>
-    <div class="row muted" style="font-size:12px">${esc(SKU_NAME(sku))} · free ${fmt(c.stock.free.value)} · safety ${fmt(c.stock.safety_stock.value)} · P50 ${fmt(c.fc.p50)}${c.plan.breach_day != null ? ' · breach ' + pdlab(c.plan.breach_day) : ''}</div></div></div>`;
-  if (!LAB.tree || LAB.treeAt !== S.loadedAt){ if (!LAB.loading) setTimeout(loadTree, 0); return secHead('lab') + head + '<div class="card" style="margin-top:14px"><div class="empty">Building the decision tree on the server…</div></div>'; }
-  if (LAB.tree.error) return secHead('lab') + head + `<div class="warnbox" style="margin-top:14px">${esc(LAB.tree.error)} <button class="btn xs" onclick="refreshTree()">Retry</button></div>`;
-  const t = LAB.tree, a = t.assumptions;
-  if (!nodeById(LAB.sel)) LAB.sel = t.nodes[0].node_id;
-  const selN = nodeById(LAB.sel), root = !selN.parent_id, selR = selN.results || {};
-  const path = nodePath(LAB.sel);
-  const q = (S.plan.questions || []).find(x => !ANSWERED[x.po_id] && x.effects.some(e => e.sku === sku && e.location === loc));
-  const qe = q && q.effects.find(e => e.sku === sku && e.location === loc);
-  const sigIds = [...new Set(S.stock.filter(x => x.sku === sku).flatMap(x => x.signals_affecting || []))];
-  const sigCtl = S.signals.filter(s => sigIds.includes(s.signal_id));
-  const blockers = path.filter(n => n.robustness === 'Harmful' || (n.results.rule && !n.results.rule.passes));
-  const fragile = path.some(n => n.robustness === 'Fragile');
-  const ex = !root ? lazy('explnode', selN.node_id + '#' + S.loadedAt + '#' + (keyed() ? 'k' : 'l'), () => api(`/explain/${encodeURIComponent(selN.node_id)}`)) : null;
-  const bp = LAB.bp[selN.node_id];
-  return secHead('lab') + head + `
-  ${q ? `<div class="qcard rv" style="--d:.06s;margin-top:14px"><span class="qm">?</span><div class="sp1"><b>${esc(q.question)} It changes the best option.</b><div class="note" style="margin-top:3px">The plan leaves unconfirmed orders out. If confirmed, the top option here becomes <b>${esc(qe.if_confirmed)}</b> instead of <b>${esc(qe.if_unconfirmed)}</b>.</div></div><div class="row"><button class="btn sm acc" onclick="answerQ(${jsq(q.po_id)},true)">Yes, confirmed</button><button class="btn sm" onclick="answerQ(${jsq(q.po_id)},false)">Not yet</button></div></div>` : ''}
-  <div class="card rv" style="--d:.08s;margin-top:14px"><div class="card-h"><div><h3>Tree-wide assumptions</h3><div class="hint">Sandbox only: they apply to every node so branches stay comparable, and never change the shared plan. Approving a path re-checks it on the shared plan.</div></div><button class="btn xs" onclick="setAssume({demand:'P50',signals:{},lanes:[],stock_corrections:[]})">Reset</button></div>
-    <div class="ctrls">
-      <div class="ctrl"><div class="lbl">Demand <b>${esc(a.demand)}</b></div><div class="seg">${['P10','P50','P90'].map(v => `<button class="${a.demand === v ? 'on' : ''}" onclick="setAssume({demand:'${v}'})">${v}</button>`).join('')}</div></div>
-      ${sigCtl.map(s => { const kind = s.type === 'supply' ? 'delay' : 'uplift', ov = (a.signals || {})[s.signal_id] || {}, on = ov.include !== false, likely = ov[kind + '_likely'] ?? s[kind + '_likely']; const cs = ['min','likely','max'].find(cc => s[kind + '_' + cc] === likely) || 'custom'; return `<div class="ctrl"><div class="lbl">${esc(s.signal_id)} <b>${on ? cs + ' ' + kind : 'off'}</b></div><div class="row" style="gap:6px"><label class="cmpk"><input type="checkbox" ${on ? 'checked' : ''} onchange="sigToggle(${jsq(s.signal_id)},this.checked)"> on</label><div class="seg">${['min','likely','max'].map(v => `<button class="${cs === v ? 'on' : ''}" onclick="sigCase(${jsq(s.signal_id)},'${kind}','${v}')">${v}</button>`).join('')}</div></div></div>`; }).join('') || '<div class="ctrl"><div class="lbl">Signals <b>none</b></div><div class="note">No supplied signal affects this SKU.</div></div>'}
-      <div class="ctrl" style="grid-column:span 2"><div class="lbl">Sandbox stock corrections (free) <b>${(a.stock_corrections || []).length ? 'on' : 'none'}</b></div><div class="row" style="gap:6px">${LOCS.map(l => { const sc = (a.stock_corrections || []).find(x => x.sku === sku && x.location === l.id), cc = CELL[key(sku, l.id)]; const v = sc ? sc.available - (sc.reserved ?? cc.stock.reserved.value) : cc.stock.free.value; return `<label class="bf sm"><span>${l.code}</span><input type="number" value="${v}" onchange="sandboxFree(${jsq(sku)},${jsq(l.id)},this.value)"></label>`; }).join('')}</div></div>
-    </div>
-  </div>
-  <div class="grid">
-    <div class="card span-7 rv" style="--d:.12s"><div class="card-h"><div><h3>Decision tree</h3><div class="hint">Each node is one simulation on the server of the root state with every decision on its path applied in order. Click a node to inspect it; tick two to compare.</div></div></div>
-      <div class="tree">${treeHTML()}</div>
-      <div class="divider"></div>
-      <span class="lbl">Scenario builder</span>
-      ${keyed() ? `<form class="ask lab-ask" onsubmit="event.preventDefault();askWhatIf($('labQ').value)"><input id="labQ" maxlength="500" placeholder="Type a what-if, e.g. What if we also reorder 50 power banks for Abu Dhabi?" autocomplete="off" ${LAB.qbusy ? 'disabled' : ''}><button class="go" aria-label="Translate" ${LAB.qbusy ? 'disabled' : ''}>${IC.send}</button></form>` : `<div class="note" style="margin:6px 0 2px">Keyless mode: typed questions are hidden. Use the controls.</div>`}
-      ${LAB.msg ? `<div class="${LAB.msg.bad ? 'warnbox' : 'note'}" style="margin:8px 0 0">${LAB.msg.text}</div>` : ''}
-      ${builderHTML()}
-    </div>
-    <div class="stack span-5">
-      <div class="card rv" style="--d:.16s"><div class="card-h"><div><h3>${esc(selN.label)}</h3><div class="hint">${root ? 'Reference: scheduled inbound orders only.' : `Path: ${path.map(n => esc(n.label)).join(' → ')}`}</div></div>${root ? '' : robTag(selN.robustness)}</div>
-        ${outputsTable(LAB.cmp.length === 2 ? LAB.cmp : (root ? [selN.node_id] : [t.nodes[0].node_id, selN.node_id]))}
-        ${LAB.cmp.length === 2 ? '<div class="note" style="margin-top:6px">Comparing the two ticked nodes. Untick one to go back.</div>' : ''}
-        ${!root && selR.rule && !selR.rule.passes ? `<div class="warnbox">${selR.rule.failing_checks.map(esc).join('<br>')}${selR.rule.details.map(d => (d.safe.failures || []).concat(d.feasible.failures || []).map(x => '<br>' + esc(x)).join('')).join('')}</div>` : ''}
-        ${!root && (selR.robustness_failing_cases || []).length ? `<details class="receipt" style="margin-top:8px"><summary><span>${selR.robustness_failing_cases.length} of 9 cases fail</span><span class="muted">${esc(selR.robustness)}</span></summary><div class="rbody">${selR.robustness_failing_cases.map(x => `<div class="ln"><span>${esc(x)}</span></div>`).join('')}</div></details>` : ''}
-        <div class="row" style="margin-top:12px">${path.length ? `<button class="btn sm acc" ${blockers.length ? 'disabled' : ''} onclick="approvePath()">Approve path (${path.length} decision${path.length > 1 ? 's' : ''})</button>` : ''}${blockers.length ? `<span class="note down">${esc(blockers[0].label)} is ${blockers[0].robustness === 'Harmful' ? 'Harmful' : 'rejected by the rule'}; this path cannot be approved.</span>` : fragile && path.length ? '<span class="note">Contains a Fragile node: a one-line reason is required.</span>' : ''}</div>
-        ${t.assumptions && (t.assumptions.demand !== 'P50' || Object.keys(t.assumptions.signals || {}).length || (t.assumptions.stock_corrections || []).length) && path.length ? '<div class="note" style="margin-top:6px">Sandbox assumptions are on. Approval re-checks this path on the shared plan and records the assumptions on the receipt.</div>' : ''}
-      </div>
-      ${!root ? `<div class="card rv" style="--d:.24s"><div class="card-h"><div><h3>Explanation</h3><div class="hint">${keyed() ? 'Written by the backend LLM from computed facts; every figure is checked by the validator.' : 'Keyless: template sentence and facts table.'}</div></div></div><div id="nodeExpl">${ex ? explainHTML(ex) : '<div class="note">Writing a verified explanation…</div>'}</div></div>` : ''}
-      ${!root ? `<div class="card rv" style="--d:.28s"><div class="card-h"><div><h3>Breaking points</h3><div class="hint">Where this path stops paying back, or the top option changes, one input at a time.</div></div>${bp ? '' : `<button class="btn xs" onclick="loadBP(${jsq(selN.node_id)})">Compute</button>`}</div>
-        ${bp ? (bp.error ? `<div class="warnbox">${esc(bp.error)}</div>` : `<div class="bp">${bp.inputs.map(x => `<div><span class="lbl">${esc(x.input)}</span><b>${x.net_zero_at == null ? '—' : 'net 0 at ' + r2(x.net_zero_at)}</b><span class="note">now ${r2(x.current_value)}${x.top_option_changes_at != null ? ` · top option changes at ${r2(x.top_option_changes_at)} (${esc(x.new_top_option || '')})` : ''}</span></div>`).join('')}</div><div class="note" style="margin-top:6px">Current net ${aed(bp.current_net_aed)} · current top option: ${esc(bp.current_top_option || 'none passes')}</div>`) : '<div class="note">The server bisects shipping cost, lane lead days and demand. It can take up to a minute.</div>'}</div>` : ''}
-    </div>
-  </div>`;
-}
-RENDER.lab = viewLab;
-AFTER.lab = () => bindCharts($('v-lab'));
-async function loadBP(id){
-  busy('Computing breaking points on the server…');
-  try { LAB.bp[id] = await api(`/scenario/nodes/${encodeURIComponent(id)}/breaking-points`); }
-  catch (e) { LAB.bp[id] = {error: errMsg(e)}; }
-  finally { unbusy(); render('lab', true); }
-}
-function answerQ(po, yes){
-  if (!yes){ ANSWERED[po] = 'no'; try { localStorage.setItem('inventra-answered', JSON.stringify(ANSWERED)); } catch (e) {} toast(`${po} stays out of the plan until it is confirmed`); render(CURRENT, true); refreshChrome(); return; }
-  const q = (S.plan.questions || []).find(x => x.po_id === po);
-  reasonModal(`Confirm ${esc(po)}`, `Records a correction on ${esc(po)} (status → Confirmed). The order then counts in the plan, which re-runs.`, why =>
-    mutate(`Confirming ${po} and re-planning…`, () => api('/corrections', {method:'POST', body:{record_id:q.how_to_answer.body.record_id, field:'status', new_value:'Confirmed', reason:why}})), 'Confirm and re-plan', 'e.g. Supplier confirmed by email on 27 Oct');
-}
-
 /* ================= explanations ================= */
 function renderCited(text, fx){
   return esc(text).replace(/\[([FR]\d+(?:\s*,\s*[FR]\d+)*)\]/g, (m, ids) => ids.split(/\s*,\s*/).map(id => {
@@ -244,15 +34,6 @@ function approveRec(k){
   const o = r.top;
   const send = why => mutate('Approving and re-planning…', () => api('/decisions', {method:'POST', body:{action:'approve', sku:r.sku, location:r.location, option_id:o.option_id, expected_input_hash:r.input_hash, reason:why || null}}));
   if (o.robustness === 'Fragile') return reasonModal('Approve a Fragile option', `${esc(o.label)} fails ${(o.robustness_failing_cases || []).length} of 9 demand and delay cases. A one-line reason is required.`, send);
-  send(null);
-}
-function approvePath(){
-  const path = nodePath(LAB.sel); if (!path.length) return;
-  const send = why => mutate('Approving the path and re-planning…', async () => {
-    const res = await api('/decisions', {method:'POST', body:{action:'approve_path', tree_id:LAB.tree.tree_id, node_id:LAB.sel, expected_input_hash:LAB.tree.plan_input_hash, reason:why || null}});
-    DSELD = res.decisions[0].decision_id; return res;
-  }, {goto:'decisions'});
-  if (path.some(n => n.robustness === 'Fragile')) return reasonModal('Approve a path with a Fragile node', 'At least one decision on this path fails some demand and delay cases. A one-line reason is required.', send);
   send(null);
 }
 function rejectModal(k){
@@ -301,7 +82,12 @@ function poRenderCheck(d){
   $('poBtns').innerHTML = w ? `<button class="btn sm solid" onclick="poToLab()">${IC.flask} Test in Scenario Lab</button><button class="btn sm" onclick="poOverride()">Override with reason</button><button class="btn sm" onclick="closeModal()">Cancel</button>`
     : `<button class="btn sm acc" onclick="poSave(null)">Create draft PO</button><button class="btn sm" onclick="closeModal()">Cancel</button>`;
 }
-function poToLab(){ const [sku, loc] = PO.key.split('|'), q = Math.round(+$('poQ').value); closeModal(); openLab(PO.key, {builder:{type:'reorder', sku, location:loc, qty:q}}); }
+async function poToLab(){
+  const [sku, loc] = PO.key.split('|'), q = Math.round(+$('poQ').value); closeModal();
+  busy('Opening a Scenario Lab tab for this order…');
+  try { const t = await api('/lab/tabs', {method:'POST', body:{sku, location:loc, name:`Draft PO ${q}`, decision:{type:'reorder', location:loc, qty:q}}}); openLab(PO.key, {select:t.tab_id}); }
+  catch (e) { showError(e); } finally { unbusy(); }
+}
 function poOverride(){
   $('poBtns').innerHTML = `<div class="field sp1" style="margin:0"><label for="poR">Reason for override</label><input id="poR" maxlength="500" placeholder="e.g. Supplier price break at this quantity"></div><button class="btn sm solid" style="align-self:flex-end" onclick="const v=$('poR').value.trim();if(!v){$('poR').style.borderColor='var(--bad)';return}poSave(v)">Override and log</button>`;
 }
@@ -573,9 +359,10 @@ async function ask(q){
     } catch (e) { bub.innerHTML = esc(errMsg(e)); }
     $('chat').scrollTop = $('chat').scrollHeight; return;
   }
-  await askWhatIf(q);
-  const b = LAB.b;
-  bub.innerHTML = LAB.filled ? `Filled the scenario builder. Nothing has run.<table>${Object.entries({decision:b.type, from:b.from, to:b.to, for:b.type === 'reorder' ? b.location : null, units:b.qty, order:b.po_id, days:b.days, 'new qty':b.new_qty}).filter(([k, v]) => v != null && v !== '').map(([k, v]) => `<tr><td>${k}</td><td><b>${esc(v)}</b></td></tr>`).join('')}</table><button class="bact" onclick="closePilot();go('lab')">Check and run in the Lab</button>` : (LAB.msg ? LAB.msg.text : 'No answer.');
+  const r = await askWhatIf(q);
+  if (!r || r.text){ bub.innerHTML = esc(r ? r.text : 'No answer.'); return; }
+  const m = r.last;
+  bub.innerHTML = m.kind === 'interpretation' ? `<b>I read this as:</b> (tab ${esc(r.tab.letter)}, nothing has run)<div style="margin-top:6px">${readingTable(m.builder)}</div><button class="bact" onclick="closePilot();go('lab')">Confirm or edit in the Lab</button>` : esc(m.text || '');
   $('chat').scrollTop = $('chat').scrollHeight;
 }
 
@@ -585,8 +372,8 @@ async function doReset(){
   closeModal(); busy('Reloading the seeded dataset…');
   try {
     await api('/reset', {method:'POST'});
-    TREES = {}; saveTrees(); ANSWERED = {}; try { localStorage.setItem('inventra-answered', '{}'); } catch (e) {}
-    LAB = {key:null, tree:null, treeAt:null, sel:null, cmp:[], b:{type:'transfer'}, msg:null, qbusy:false, filled:false, question:null, parsedAssumptions:null, bp:{}, loading:false};
+    ANSWERED = {}; try { localStorage.setItem('inventra-answered', '{}'); localStorage.removeItem('inventra-trees'); } catch (e) {}
+    LAB = {key:null, ws:null, wsAt:null, sel:null, tabs:{}, ticks:[], mode:'tabs', cmp:null, ev:null, form:null, showSettings:true, loading:false};
     DSELD = null; RP = null; RECALC = {};
     await loadAll(); refreshChrome(); go('home'); toast('Seeded dataset reloaded');
   } catch (e) { showError(e); }

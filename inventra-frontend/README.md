@@ -28,7 +28,7 @@ Open **http://localhost:3000**, not 127.0.0.1:3000. The backend's default CORS s
 | Demand Forecast | `GET /forecast` (daily / weekly), `GET /forecast/accuracy` |
 | Inventory Network | `GET /network/projection`, `GET /network/ageing`, `POST /drafts/po` |
 | Disruptions | `GET /signals`, `PATCH /signals/{id}`, `GET /signals/{id}/impact` |
-| Scenario Lab | `POST/GET /scenario/trees`, `PATCH …/assumptions`, `POST …/nodes`, `POST /scenario/parse`, `GET /explain/{node}`, `GET /scenario/nodes/{id}/breaking-points`, `POST /decisions` (approve_path) |
+| Scenario Lab | `GET /lab/workspace`, `POST/GET/PATCH /lab/tabs…`, `…/fork`, `…/decision`, `…/chat`, `…/review`, `GET /lab/compare`, `GET /lab/event-impact` |
 | Decisions | `GET /decisions`, `GET /decisions/{id}`, `POST /decisions/{id}/recalculate` |
 | Evaluation | `POST /evaluation/replay`, `GET /evaluation/report` |
 | Shared | `GET /settings/mode`, `GET /freshness`, `POST /reset` |
@@ -43,10 +43,26 @@ Open **http://localhost:3000**, not 127.0.0.1:3000. The backend's default CORS s
 - **Background loads:** the activity feed polls every 6 s, so files loaded by the backend's inbox-folder watcher appear here, with What changed.
 
 ## Reduced vs the original file (no backend endpoint exists for these)
-- **Removed actions:** you can't undo a correction (record a new one instead) and you can't delete a tree node.
+- **Removed action:** you can't undo a correction (record a new one instead).
 - **Data Hub tables:** the hub shows the tables the API serves. SKU master, lanes, holding costs, lead history, batches and cycle counts appear inside decision receipts instead.
-- **Tree assumptions:** the shipping-cost multiplier and lane-lead sliders are gone, because the API doesn't expose lane values. Breaking points cover those sensitivities.
-- **Projection charts:** they show the Do-nothing path and band. Option outcomes are compared numerically in the Scenario Lab.
+- **Network projection charts:** they show the Do-nothing path and band. Each Scenario Lab tab plots its own decision against Do nothing.
 - **Planning parameters:** current values aren't served. The panel shows changes made through corrections and lets you submit new ones.
 - **Evaluation checklist:** it appears after the replay runs, because the server scores it as part of the replay.
 - **Local-only state:** browser storage keeps only conveniences: theme, sound, keyless display, the tree id per SKU-location, and "not yet" answers to the PO question.
+
+## Scenario Lab
+- **Layout:** follows the "Scenario Lab" spec and mockups, in the site's colours and Geist font.
+- **Tab bar:** a pinned Do nothing tab, then A, B, C… tabs with tick boxes, "+ New decision" and "Compare 2 selected".
+- **Inside a tab:** chat on the left, the settings sidebar on the right (Hide settings slides it away), and the results in the middle, in this order:
+  1. Summary cards
+  2. Projected stock with the P10–P90 band
+  3. Stockout probability per location
+  4. Net-benefit bridge
+  5. Costs, ageing and holding
+  6. Event impact table
+  7. Assumptions and data quality
+  8. Alternatives checked
+  9. Breaking Point panel
+  10. Approve / Reject / Send back
+- **Compare view:** a verdict, read-only setting chips per side, a mismatch warning, headline metrics with the better value in green, and charts on the same scale. You can approve either side from here.
+- **Chat:** typed what-ifs only need the backend's LLM key. Without one, the chat column shows a form instead.

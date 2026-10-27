@@ -18,7 +18,7 @@ from .service import HITLError, Service, require_reason
 from .storage import now_iso
 
 DEFAULT_ASSUMPTIONS = {"demand": "P50", "signals": {}, "lanes": [], "stock_corrections": []}
-DECISION_TYPES = ("transfer", "split", "reorder", "bring_forward", "reduce_inbound", "delay_inbound", "wait")
+DECISION_TYPES = ("transfer", "split", "reorder", "bring_forward", "reduce_inbound", "delay_inbound", "wait", "discount")
 
 
 # ---------------------------------------------------------------------- sandbox engine
@@ -135,6 +135,18 @@ def to_decision(eng: Engine, b: Dict[str, Any]) -> Dict[str, Any]:
     loc = b.get("location")
     if loc not in locs:
         raise HITLError(f"Unknown location {loc}", 422)
+    if t == "discount":
+        units = int(b.get("units") or 0)
+        free = st.free(sku, loc)
+        if not (0 < units <= free):
+            raise HITLError(f"units must be between 1 and the {free} free units at {loc}", 422)
+        depth = float(b.get("depth_pct") if b.get("depth_pct") is not None else 15)
+        uplift = float(b.get("uplift_pct") if b.get("uplift_pct") is not None else 20)
+        if not (0 < depth <= 90):
+            raise HITLError("depth_pct must be above 0 and at most 90", 422)
+        if not (0 <= uplift <= 300):
+            raise HITLError("uplift_pct must be between 0 and 300", 422)
+        return {"type": "discount", "sku": sku, "location": loc, "units": units, "depth_pct": depth, "uplift_pct": uplift}
     return {"type": "wait", "sku": sku, "location": loc, "po_id": b.get("po_id")}
 
 

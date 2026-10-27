@@ -34,6 +34,7 @@ Builder fields by type:
   reduce_inbound: {"type":"reduce_inbound","sku","po_id","new_qty"}
   delay_inbound: {"type":"delay_inbound","sku","po_id","days"}
   wait: {"type":"wait","sku","location","po_id"(optional)}
+  discount: {"type":"discount","sku","location","units","depth_pct","uplift_pct"(optional assumed sell-through uplift %)}
 Assumptions (all optional): {"demand":"P10"|"P50"|"P90",
   "signals":{"<signal_id>":{"include":bool,"delay_min","delay_likely","delay_max","uplift_min","uplift_likely","uplift_max"}},
   "lanes":[{"from","to","fixed_cost_aed","cost_per_unit_aed","lead_days"}],
@@ -217,7 +218,8 @@ def parse_question(svc: Service, tree: Dict[str, Any], question: str) -> Dict[st
     if set(obj) - allowed or "decision" not in obj or not isinstance(obj["decision"], dict):
         raise HITLError("The model returned fields outside the scenario builder. Nothing was run.", 422)
     decision = obj["decision"]
-    known = {"type", "sku", "from", "to", "qty", "legs", "location", "order_day", "po_id", "days", "new_qty"}
+    known = {"type", "sku", "from", "to", "qty", "legs", "location", "order_day", "po_id", "days", "new_qty",
+             "units", "depth_pct", "uplift_pct"}
     if set(decision) - known:
         raise HITLError(f"Unknown builder fields: {', '.join(sorted(set(decision) - known))}. Nothing was run.", 422)
     assumptions = obj.get("assumptions") or None

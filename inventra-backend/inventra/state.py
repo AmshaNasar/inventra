@@ -102,6 +102,7 @@ class State:
     corrected_fields: Dict[str, List[str]] = field(default_factory=dict)
     sandbox: bool = False
     include_unconfirmed: Tuple[str, ...] = ()  # PO ids treated as arriving although Unconfirmed (S8 what-if)
+    order_delay_add: int = 0  # Scenario Lab sandbox: extra days on new supplier orders
 
     # ---------------------------------------------------------------- helpers
     @property

@@ -8,6 +8,7 @@ Decision objects (plain dicts) used throughout:
   {"type": "delay_inbound", "sku", "po_id", "days"}
   {"type": "wait", "sku", "location", "po_id"}
   {"type": "flag_clearance", "sku", "location"}
+  {"type": "discount", "sku", "location", "units", "depth_pct", "uplift_pct"}   # Scenario Lab; uplift is an Assumption
   {"type": "do_nothing", "sku", "location"}
 """
 from __future__ import annotations
@@ -28,6 +29,7 @@ LOST_EPS = 0.5  # half a unit: below this, fractional simulated demand is not co
 PCTS = ("P10", "P50", "P90")
 LEVELS = ("min", "likely", "max")
 NO_EFFECT = ("wait", "flag_clearance", "do_nothing")
+_BATCH_INDEX: Dict[int, Tuple[Any, Dict]] = {}
 
 
 def ceil_pack(q: float, pack: int) -> int:
@@ -43,6 +45,7 @@ class LocResult:
     sold: float = 0.0
     lost: float = 0.0
     lost_daily: List[float] = field(default_factory=list)
+    sold_daily: List[float] = field(default_factory=list)
     end_daily: List[float] = field(default_factory=list)
     below_ss_days: int = 0
     breach_days: int = 0      # 0 < free < safety stock
@@ -65,10 +68,11 @@ class SimResult:
     expedite_cost: float = 0.0
     notes: List[str] = field(default_factory=list)
     picked_batches: List[Dict[str, Any]] = field(default_factory=list)
+    discount_cost: float = 0.0  # margin given up on discounted units sold
 
     @property
     def direct_cost(self) -> float:
-        return self.transfer_cost + self.expedite_cost
+        return self.transfer_cost + self.expedite_cost + self.discount_cost
 
     def total(self, attr: str) -> float:
         return float(sum(getattr(r, attr) for r in self.locs.values()))
@@ -82,6 +86,7 @@ class SimResult:
             "aged_value_aed": round(self.total("aged_value"), 2), "ageing_units": round(self.total("ageing_units"), 1),
             "holding_cost_aed": round(self.total("holding"), 2), "ageing_cost_aed": round(self.total("ageing_cost"), 2),
             "transfer_cost_aed": round(self.transfer_cost, 2), "expedite_cost_aed": round(self.expedite_cost, 2),
+            "discount_margin_lost_aed": round(self.discount_cost, 2),
             "lost_by_location": {l: round(r.lost, 1) for l, r in self.locs.items()},
         }
 
@@ -98,9 +103,12 @@ class Engine:
         self._lead_cache: Dict[str, float] = {}
         self._sim_cache: Dict[Tuple, "SimResult"] = {}
 
-    def derive(self, state: State) -> "Engine":
+    def derive(self, state: State, refresh_uplift: bool = True) -> "Engine":
         """Engine for a modified state (sandbox / signal what-if). History is unchanged, so only
-        signal uplift is recomputed; the backtested base rates and bands are reused."""
+        signal uplift is recomputed; the backtested base rates and bands are reused. Pass
+        refresh_uplift=False when no demand signal changed (supply settings, lanes, stock)."""
+        if not refresh_uplift:
+            return Engine(state, {"cells": self.fc, "meta": self.fc_meta})
         cells = {}
         for k, c in self.fc.items():
             uplift, ids = {}, []
@@ -136,9 +144,10 @@ class Engine:
         sup = self.state.skus[sku]["supplier"]
         mean = self.supplier_mean_lead(sup)
         delay, ids = sigmod.new_order_delay(self.state, sku, level)
-        lead = int(math.ceil(mean - 1e-9)) + delay
+        extra = int(getattr(self.state, "order_delay_add", 0) or 0)  # Scenario Lab shipment-delay setting
+        lead = int(math.ceil(mean - 1e-9)) + delay + extra
         return lead, {"supplier": sup, "mean_past_lead_days": round(mean, 2), "signal_delay_days": delay,
-                      "signals": ids, "lead_days": lead}
+                      "signals": ids, "lead_days": lead, **({"scenario_delay_days": extra} if extra else {})}
 
     def lane(self, a: str, b: str) -> Dict[str, Any]:
         return self.state.lanes[(a, b)]
@@ -231,9 +240,7 @@ class Engine:
         """Free and reserved batches as [units, age_days, batch_id], oldest first.
         Reserved units are taken from the oldest batches (assumption); unexplained units get age 0."""
         inv = self.state.inventory.get((sku, loc), {"available": 0, "reserved": 0})
-        b = self.state.batches
-        rows = b[(b["sku"] == sku) & (b["location"] == loc)].sort_values("age_days", ascending=False) if not b.empty else b
-        batches = [[float(u), float(a), str(i)] for u, a, i in zip(rows.get("units", []), rows.get("age_days", []), rows.get("batch_id", []))]
+        batches = [list(x) for x in self._batch_index().get((sku, loc), [])]
         notes = []
         total = sum(x[0] for x in batches)
         avail = float(inv["available"])
@@ -258,6 +265,23 @@ class Engine:
             if x[0] - take > EPS:
                 free.append([x[0] - take, x[1], x[2]])
         return free, reserved, notes
+
+    def _batch_index(self) -> Dict[Tuple[str, str], List[List[Any]]]:
+        """Batches per SKU-location, oldest first. Built once per batch table and shared by every
+        derived (sandbox) engine, since sandboxes never edit batches."""
+        b = self.state.batches
+        hit = _BATCH_INDEX.get(id(b))
+        if hit is not None and hit[0] is b:
+            return hit[1]
+        idx: Dict[Tuple[str, str], List[List[Any]]] = {}
+        if not b.empty:
+            for (sk, lc), g in b.groupby(["sku", "location"]):
+                g = g.sort_values("age_days", ascending=False)
+                idx[(sk, lc)] = [[float(u), float(a), str(i)] for u, a, i in zip(g["units"], g["age_days"], g["batch_id"])]
+        if len(_BATCH_INDEX) > 8:
+            _BATCH_INDEX.clear()
+        _BATCH_INDEX[id(b)] = (b, idx)
+        return idx
 
     @staticmethod
     def _take(batches: List[List[float]], qty: float) -> Tuple[float, List[List[float]]]:
@@ -321,6 +345,10 @@ class Engine:
             elif d["type"] == "bring_forward":
                 po = next((p for p in st.inbound if p["po_id"] == d["po_id"]), None)
                 expedite_cost += float(po.get("expedite_cost_aed") or 0.0) if po else 0.0
+        # discount: the oldest `units` free units at a location are marked down; demand there rises by the
+        # assumed uplift while discounted units remain, and each discounted unit sold gives up depth x price
+        disc = {d["location"]: d for d in decisions if d["type"] == "discount"}
+        discount_cost = 0.0
         out: Dict[str, LocResult] = {}
         for l in self.locs:
             dem = self.demand(sku, l, pct, level, (scale or {}).get(l, 1.0))
@@ -328,13 +356,20 @@ class Engine:
             hc = st.holding.get(l, 0.0)
             fb, rb = free_b[l], res_b[l]
             r = LocResult(min_stock=float("inf"))
+            dd = disc.get(l)
+            disc_left = min(float(dd["units"]), sum(b[0] for b in fb)) if dd else 0.0
             for t in range(1, H + 1):
                 for b in arrivals[l][t]:
                     fb.append(list(b))
                 fb.sort(key=lambda x: -x[1])  # oldest first
                 stock = sum(b[0] for b in fb)
-                sold = min(dem[t - 1], stock)
-                lost = dem[t - 1] - sold
+                want = dem[t - 1] * (1 + float(dd["uplift_pct"]) / 100.0) if dd and disc_left > EPS else dem[t - 1]
+                sold = min(want, stock)
+                lost = max(0.0, dem[t - 1] - sold)  # uplifted demand that goes unmet is not a lost sale
+                if dd and disc_left > EPS:
+                    sold_disc = min(sold, disc_left)  # FIFO: the discounted (oldest) units sell first
+                    disc_left -= sold_disc
+                    discount_cost += sold_disc * srow["unit_price"] * float(dd["depth_pct"]) / 100.0
                 self._take(fb, sold)
                 for b in fb:
                     b[1] += 1
@@ -345,6 +380,7 @@ class Engine:
                 r.sold += sold
                 r.lost += lost
                 r.lost_daily.append(lost)
+                r.sold_daily.append(sold)
                 r.end_daily.append(end)
                 r.min_stock = min(r.min_stock, end)
                 if end < ss - EPS:
@@ -367,20 +403,25 @@ class Engine:
             if r.min_stock == float("inf"):
                 r.min_stock = 0.0
             out[l] = r
-        return SimResult(out, transfer_cost, expedite_cost, notes, picked_all)
+        return SimResult(out, transfer_cost, expedite_cost, notes, picked_all, discount_cost)
 
     # ------------------------------------------------------------------ 6.4 net benefit
     def net(self, sku: str, opt: SimResult, base: SimResult) -> Dict[str, float]:
+        # Margin x extra units sold. With unchanged demand this equals Margin x lost sales avoided (section 6.4);
+        # a discount also raises demand, so units sold is the general form.
         margin = self.state.margin(sku)
         d_lost = base.total("lost") - opt.total("lost")
+        d_sold = opt.total("sold") - base.total("sold")
         d_hold = opt.total("holding") - base.total("holding")
         d_age = opt.total("ageing_cost") - base.total("ageing_cost")
         direct = opt.direct_cost - base.direct_cost
         return {
-            "net_benefit_aed": round(margin * d_lost - d_hold - d_age - direct, 2),
+            "net_benefit_aed": round(margin * d_sold - d_hold - d_age - direct, 2),
             "margin_per_unit_aed": round(margin, 2),
             "lost_sales_avoided": round(d_lost, 1),
-            "margin_protected_aed": round(margin * d_lost, 2),
+            "extra_units_sold": round(d_sold, 1),
+            "margin_protected_aed": round(margin * d_sold, 2),
+            "discount_margin_lost_aed": round(opt.discount_cost - base.discount_cost, 2),
             "delta_holding_aed": round(d_hold, 2),
             "delta_ageing_aed": round(d_age, 2),
             "direct_cost_aed": round(direct, 2),
@@ -432,6 +473,12 @@ class Engine:
                 if self.supplier_lead(sku)[0] + int(d.get("order_day", 0)) > self.H:
                     feas_fail.append("arrives after horizon")
                     labels.append("arrives after horizon")
+            elif d["type"] == "discount":
+                avail = self.state.free(sku, d["location"])
+                if d["units"] > avail:
+                    feas_fail.append(f"discount covers {d['units']} units but only {avail} are free at {d['location']}")
+                if not (0 < float(d["depth_pct"]) < 100):
+                    feas_fail.append("discount depth must be between 0% and 100%")
             elif d["type"] in ("bring_forward", "reduce_inbound", "delay_inbound"):
                 po = next((p for p in self.state.inbound if p["po_id"] == d["po_id"]), None)
                 if po is None or not po.get("changeable"):

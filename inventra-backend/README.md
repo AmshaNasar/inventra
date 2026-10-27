@@ -9,7 +9,7 @@ Inventra is an AI-assisted inventory planning workspace for GulfTrade Supplies, 
 ```bash
 make setup     # python3 -m venv .venv && pip install -r requirements.txt  (Python 3.9+)
 make demo      # API on http://127.0.0.1:8000, interactive docs at /docs
-make test      # 36 tests: section 6 formulas on the worked example, validator, keyed LLM (mocked), full demo flow
+make test      # 44 tests: section 6 formulas on the worked example, validator, keyed LLM (mocked), full demo flow
 ```
 
 ### With Docker
@@ -41,7 +41,8 @@ On first start, the app loads the seeded dataset into `runtime/inventra.duckdb`.
 | `inventra/engine.py` | Section 6: stock path, spare, need, day-by-day simulation with FIFO batches, net benefit, recommendation rule, robustness grid, input hash |
 | `inventra/candidates.py` | Option generation (single, split, naive, reorder, bring forward, reduce/delay, wait, clearance), urgency |
 | `inventra/plan.py` | Portfolio allocation (most urgent first; approvals lock spare), ranked queue, rejected list, KPIs, S8 question |
-| `inventra/tree.py` | Scenario Lab: decision tree, sandbox assumptions, stacked simulation, path approval, breaking points |
+| `inventra/lab.py` | Scenario Lab tabs: one decision per tab, per-tab disruption settings, simulated-path statistics (stockout probability, net-benefit range), net-benefit bridge, Breaking Point panel, Compare view, event impact, Approve / Reject / Send back |
+| `inventra/tree.py` | Earlier decision-tree API (still served; the UI now uses `/lab`) |
 | `inventra/service.py` | Global changes (corrections, signal edits), re-plan + What changed, Stale marking, approvals, audit |
 | `inventra/watcher.py` | Inbox watcher: notice → check → load → re-plan → report |
 | `inventra/llm/` | OpenRouter client, fact sets, section 9.3 validator, cache, keyless fallback, typed-question parsing |
@@ -49,7 +50,7 @@ On first start, the app loads the seeded dataset into `runtime/inventra.duckdb`.
 | `data/seed`, `data/inbox_drops`, `data/judges` | Copied from `stockpilot-data`; the answer key is under `data/judges/answer_key` |
 
 ## API (section 14.3)
-`POST /reset` · `GET /settings/mode` · `POST /data/upload/{table}` · `GET /inbox/events` · `POST /inbox/events/seen` · `GET /data/validation` · `GET /stock` · `POST|GET /corrections` · `GET /forecast` (`granularity=daily|weekly`) · `GET /forecast/accuracy` · `GET /network/matrix` · `GET /network/projection` · `GET /network/ageing` · `GET /freshness` · `GET /signals` · `PATCH /signals/{id}` · `GET /signals/{id}/impact` · `GET /plan` · `GET /what-changed` · `POST /scenario/trees` · `GET /scenario/trees/{id}` · `PATCH /scenario/trees/{id}/assumptions` · `POST /scenario/trees/{id}/nodes` · `POST /scenario/parse` · `GET /explain/{node_id}` · `GET /explain/recommendation` · `GET /scenario/nodes/{id}/breaking-points` · `POST|GET /decisions` · `GET /decisions/{id}` · `POST /decisions/{id}/recalculate` · `POST /drafts/po` · `POST /evaluation/replay` · `GET /evaluation/report` · `GET /audit`
+`POST /reset` · `GET /settings/mode` · `POST /data/upload/{table}` · `GET /inbox/events` · `POST /inbox/events/seen` · `GET /data/validation` · `GET /stock` · `POST|GET /corrections` · `GET /forecast` (`granularity=daily|weekly`) · `GET /forecast/accuracy` · `GET /network/matrix` · `GET /network/projection` · `GET /network/ageing` · `GET /freshness` · `GET /signals` · `PATCH /signals/{id}` · `GET /signals/{id}/impact` · `GET /plan` · `GET /what-changed` · `POST /scenario/trees` · `GET /scenario/trees/{id}` · `PATCH /scenario/trees/{id}/assumptions` · `POST /scenario/trees/{id}/nodes` · `POST /scenario/parse` · `GET /explain/{node_id}` · `GET /explain/recommendation` · `GET /scenario/nodes/{id}/breaking-points` · `POST|GET /decisions` · `GET /decisions/{id}` · `POST /decisions/{id}/recalculate` · `POST /drafts/po` · `POST /evaluation/replay` · `GET /evaluation/report` · `GET /audit` · Scenario Lab tabs: `GET /lab/workspace` · `POST /lab/tabs` · `GET/PATCH /lab/tabs/{id}` · `POST /lab/tabs/{id}/fork` · `POST /lab/tabs/{id}/decision` · `POST /lab/tabs/{id}/chat` · `POST /lab/tabs/{id}/review` · `GET /lab/compare` · `GET /lab/event-impact`
 
 `POST /decisions` takes `action`: `approve` / `reject` (one option from the queue) or `approve_path` (a tree node).
 
@@ -89,3 +90,10 @@ Unit tests on the section 10.4 fixture reproduce the doc exactly:
 - After the cycle-count correction: back to Dubai only.
 
 On the live seeded data, the Chargers P90 band is narrower than the fixture (Dubai P90 247 vs 260). Dubai's spare is therefore 190, and after SIG-001 Dubai-only 190 still beats the split. Checklist case 1 is reported as **missed**. Case 5's Sharjah transfer also appears only as the full-need option (live Sharjah spare is 0).
+
+## Scenario Lab tabs (added after the design doc, from "Scenario Lab: A Decision Playground")
+- **Tabs:** one decision per tab, plus a pinned Do nothing tab. Each tab has its own settings: shipment delay, component supply shortage, shipping-route delay, chance a delay happens, demand sensitivity and transfer cost change. Changing a setting re-runs only that tab and never touches the shared plan.
+- **Supplied events only:** shortage and route toggles can only switch on events from the dated signal register that match the SKU (409/422 otherwise). Severity maps to the event's own min / likely / max delay.
+- **Statistics:** stockout probability, expected lost sales and the net-benefit range come from 80 simulated demand paths. Each path draws the 30-day demand level per location from that cell's P10/P50/P90 band, and whether the delay happens. Charts, timing and breaking points use the base case.
+- **Discount:** discount scenarios are new and Lab-only. Demand rises by an **assumed** sell-through uplift while the oldest units are marked down, and the margin given up is charged. The Breaking Point panel shows the uplift needed to pay off. Net benefit now uses margin × extra units sold, which is identical to the design doc's margin × lost sales avoided whenever demand is unchanged.
+- **Approval:** Approve re-checks the decision on the shared plan (rule, robustness, input hash, one active decision per cell). Reject needs a reason. Send back needs a reason and records no decision. Approved and rejected tabs are locked; fork them to test changes.

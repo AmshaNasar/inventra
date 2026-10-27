@@ -136,6 +136,9 @@ def staff_instructions(eng: Engine, d: Dict[str, Any], picked: List[Dict[str, An
         out.append(f"Ask the supplier to reduce {d['po_id']} to {d['new_qty']} units.")
     elif t == "delay_inbound":
         out.append(f"Ask the supplier to delay {d['po_id']} by {d['days']} days.")
+    elif t == "discount":
+        out.append(f"Mark down the {d['units']} oldest units of {sku} ({name}) at {d['location']} by {d['depth_pct']:g}%, "
+                   f"picking oldest batches first. The {d['uplift_pct']:g}% sell-through uplift is an assumption, not data.")
     elif t == "flag_clearance":
         out.append(f"Flag {sku} ({name}) at {d['location']} for clearance review (no pricing model in Inventra).")
     return out
@@ -177,6 +180,9 @@ def build(eng: Engine, sku: str, loc: str, chosen: Dict[str, Any], options: List
         formulas += [FORMULAS["spare"], FORMULAS["need"]] + ([FORMULAS["split"]] if d.get("variant") == "split" else [])
     if d["type"] == "reorder":
         formulas += [FORMULAS["lead"], FORMULAS["order_by"], FORMULAS["reorder_qty"]]
+    if d["type"] == "discount":
+        formulas += ["Discount: demand x (1 + assumed uplift) while discounted units remain; "
+                     "margin given up = discounted units sold x unit price x depth"]
     receipt = {
         "sku": sku, "sku_name": eng.state.skus[sku]["name"], "location": loc, "planning_day": str(eng.state.day90),
         "chosen": {"label": chosen["label"], "decision": d, "net_benefit_aed": chosen.get("net_benefit_aed"),
@@ -189,7 +195,9 @@ def build(eng: Engine, sku: str, loc: str, chosen: Dict[str, Any], options: List
         "lead_time_breakdown": lead_breakdown(eng, d),
         "robustness": {"label": rob.get("label"), "failing_cases": rob.get("failing_cases")} if rob else None,
         "staff_instructions": [s for x in (list(path) or [d]) for s in staff_instructions(eng, x, chosen.get("picked_batches") or [])],
-        "assumptions": [REORDER_ASSUMPTION] if d["type"] == "reorder" else [],
+        "assumptions": ([REORDER_ASSUMPTION] if d["type"] == "reorder" else [])
+        + ([f"Assumed sell-through uplift of {d['uplift_pct']:g}% while discounted (no price-elasticity data)"]
+           if d["type"] == "discount" else []),
         "input_hash": eng.sku_input_hash(sku),
         "draft_only": True,
     }

@@ -27,6 +27,7 @@ from ..llm import explain as llm
 from ..replay import run as run_replay
 from ..schemas import UPLOADABLE
 from ..service import HITLError, get_service
+from ..lab import Lab
 from ..tree import Trees
 from ..validation import raw_duplicates, report as validation_report
 from ..watcher import InboxWatcher, ingest
@@ -479,3 +480,114 @@ def evaluation_report():
     if not rep:
         raise HTTPException(404, "no replay run yet: POST /evaluation/replay")
     return ok(rep)
+
+
+# ---------------------------------------------------------------------- scenario lab tabs (one decision per tab)
+class LabBuilder(Strict):
+    type: Literal["transfer", "split", "reorder", "bring_forward", "reduce_inbound", "delay_inbound", "wait", "discount"]
+    sku: Optional[str] = None
+    from_: Optional[str] = Field(None, alias="from")
+    to: Optional[str] = None
+    qty: Optional[int] = Field(None, gt=0, le=1_000_000)
+    legs: Optional[List[Leg]] = None
+    location: Optional[str] = None
+    order_day: Optional[int] = Field(None, ge=0, le=30)
+    po_id: Optional[str] = None
+    days: Optional[int] = Field(None, gt=0, le=365)
+    new_qty: Optional[int] = Field(None, ge=0)
+    units: Optional[int] = Field(None, gt=0, le=1_000_000)
+    depth_pct: Optional[float] = Field(None, gt=0, le=90)
+    uplift_pct: Optional[float] = Field(None, ge=0, le=300)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class LabSettings(Strict):
+    shipment_delay_days: Optional[int] = Field(None, ge=0, le=30)
+    supply_shortage: Optional[Literal["none", "mild", "likely", "severe"]] = None
+    route_delay: Optional[Literal["none", "mild", "likely", "severe"]] = None
+    delay_chance_pct: Optional[float] = Field(None, ge=0, le=100)
+    demand: Optional[Literal["low", "expected", "high"]] = None
+    transfer_cost_change_pct: Optional[float] = Field(None, ge=-50, le=300)
+
+
+class LabTabIn(Strict):
+    sku: str
+    location: str
+    name: Optional[str] = Field(None, max_length=60)
+    decision: Optional[LabBuilder] = None
+    settings: Optional[LabSettings] = None
+
+
+class LabTabPatch(Strict):
+    name: Optional[str] = Field(None, max_length=60)
+    settings: Optional[LabSettings] = None
+
+
+class LabDecisionIn(Strict):
+    decision: LabBuilder
+    source: Literal["Controls", "Question"] = "Controls"
+    question_text: Optional[str] = Field(None, max_length=500)
+
+
+class LabChatIn(Strict):
+    message: str = Field(..., min_length=1, max_length=500)
+
+
+class LabReviewIn(Strict):
+    action: Literal["approve", "reject", "send_back"]
+    reason: Optional[str] = Reason
+    expected_input_hash: Optional[str] = None
+
+
+def _b(x):
+    return x.model_dump(by_alias=True, exclude_none=True) if x is not None else None
+
+
+@app.get("/lab/workspace", tags=["scenario lab tabs"])
+def lab_workspace(sku: str, location: str):
+    return ok(Lab(get_service()).workspace(sku, location))
+
+
+@app.post("/lab/tabs", tags=["scenario lab tabs"])
+def lab_create(body: LabTabIn):
+    return ok(Lab(get_service()).create(body.sku, body.location, _b(body.decision), _b(body.settings), body.name))
+
+
+@app.get("/lab/tabs/{tab_id}", tags=["scenario lab tabs"])
+def lab_tab(tab_id: str):
+    return ok(Lab(get_service()).get(tab_id))
+
+
+@app.patch("/lab/tabs/{tab_id}", tags=["scenario lab tabs"])
+def lab_patch(tab_id: str, body: LabTabPatch):
+    return ok(Lab(get_service()).update(tab_id, body.name, _b(body.settings)))
+
+
+@app.post("/lab/tabs/{tab_id}/fork", tags=["scenario lab tabs"])
+def lab_fork(tab_id: str):
+    return ok(Lab(get_service()).fork(tab_id))
+
+
+@app.post("/lab/tabs/{tab_id}/decision", tags=["scenario lab tabs"])
+def lab_decision(tab_id: str, body: LabDecisionIn):
+    return ok(Lab(get_service()).set_decision(tab_id, _b(body.decision), body.source, body.question_text))
+
+
+@app.post("/lab/tabs/{tab_id}/chat", tags=["scenario lab tabs"])
+def lab_chat(tab_id: str, body: LabChatIn):
+    return ok(Lab(get_service()).chat(tab_id, body.message))
+
+
+@app.post("/lab/tabs/{tab_id}/review", tags=["scenario lab tabs"])
+def lab_review(tab_id: str, body: LabReviewIn):
+    return ok(Lab(get_service()).review(tab_id, body.action, body.reason, body.expected_input_hash))
+
+
+@app.get("/lab/compare", tags=["scenario lab tabs"])
+def lab_compare(a: str, b: str):
+    return ok(Lab(get_service()).compare(a, b))
+
+
+@app.get("/lab/event-impact", tags=["scenario lab tabs"])
+def lab_event_impact(sku: str, location: str):
+    return ok(Lab(get_service()).event_impact(sku, location))
