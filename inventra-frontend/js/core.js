@@ -258,7 +258,7 @@ const SECTIONS = [
   {id:'network', label:'Inventory Network', title:'Inventory <em>network</em>', stage:'Identify imbalances', lede:'Free stock by SKU and location, coloured Short, Buffer breach, Healthy, Excess, Ageing or Aged. Open a row for the stock path and order-by date.', i:'net'},
   {id:'disruptions', label:'Disruptions', title:'Disrup<em>tions</em>', stage:'External signals', lede:'Supply signals move arrival dates and lead times; only demand signals change the forecast. Each applies only to the SKUs and orders it matches.', i:'bolt'},
   {id:'lab', label:'Scenario Lab', title:'Scenario <em>lab</em>', stage:'Challenge and approve', lede:'Test any decision before you make it. One decision per tab, measured against Do nothing; tick two tabs to compare them side by side. Nothing here changes real stock.', i:'flask'},
-  {id:'decisions', label:'Decisions', title:'Deci<em>sions</em>', stage:'Approve and record', lede:'Every approval, rejection and override with its receipt and staff instructions. A decision turns Stale the moment an input it used changes.', i:'check'},
+  {id:'decisions', label:'Decisions', title:'Deci<em>sions</em>', stage:'Approve and record', lede:'Every decision is frozen at approval, then reviewed against actual sales once its 30-day window closes. The track record shows where the system is right and where it is weak, with sample sizes.', i:'check'},
   {id:'evaluation', label:'Evaluation', title:'Evalu<em>ation</em>', stage:'Measure against a baseline', lede:'Plan on day 90, then reveal days 91 to 120 from the answer key. Inventra and a recent-average baseline face the same true demand and delays.', i:'target'}
 ];
 const ORDER = ['home', ...SECTIONS.map(s => s.id)];

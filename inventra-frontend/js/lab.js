@@ -166,21 +166,7 @@ function saveParam(name){
 
 /* ================= DECISIONS (R1, R2) ================= */
 let DSELD = null, RECALC = {};
-function openDecision(id){ DSELD = id; go('decisions'); }
-function viewDecisions(){
-  const ds = S.decisions.slice().reverse();
-  if (!DSELD && ds[0]) DSELD = ds[0].decision_id;
-  const sel = ds.find(x => x.decision_id === DSELD);
-  const d = sel ? lazy('dec', sel.decision_id + '#' + sel.status + '#' + S.loadedAt, () => api(`/decisions/${encodeURIComponent(sel.decision_id)}`)) : null;
-  const top = S.plan.queue.find(r => !activeDecision(key(r.sku, r.location)));
-  return secHead('decisions') + `
-  <div class="card rv" style="--d:.05s"><div class="card-h"><div><h3>Decision log</h3><div class="hint">Approved, Rejected, Overridden and Stale. Each row stores a hash of every input it used.</div></div><span class="tag">${ds.length} entries</span></div>
-    ${ds.length ? `<div class="tscroll"><table class="t"><thead><tr><th>ID</th><th>Decision</th><th>SKU → location</th><th>Approver</th><th>Time</th><th>Input hash</th><th>Status</th></tr></thead><tbody>${ds.map(x => `<tr class="click ${x.decision_id === DSELD ? 'sel' : ''}" onclick="DSELD=${jsq(x.decision_id)};render('decisions',true)"><td class="mono"><b>${esc(x.decision_id)}</b>${x.path_id ? `<div class="muted" style="font-size:10.5px">${esc(x.path_id)}</div>` : ''}</td><td>${esc(x.chosen.label)}${x.reason ? `<div class="muted" style="font-size:11px">${esc(x.reason)}</div>` : ''}</td><td>${esc(x.sku)} → ${esc(locName(x.location))}</td><td>${esc(x.approver)}</td><td class="mono" style="font-size:11px">${tlab(x.timestamp).slice(5)}</td><td class="mono" style="font-size:11px">${esc(x.input_hash)}</td><td><span class="pill ${esc(x.status)}">${esc(x.status)}</span></td></tr>`).join('')}</tbody></table></div>`
-      : `<div class="empty">No decisions yet. Nothing moves until you approve.${top ? ` <button class="btn xs acc" onclick="openLab(${jsq(key(top.sku, top.location))})">Review ${esc(top.sku)} → ${esc(locName(top.location))} in the Lab</button>` : ''}</div>`}
-  </div>
-  ${sel ? (d ? (d.error ? `<div class="warnbox">${esc(d.error)}</div>` : decisionDoc(d)) : '<div class="card" style="margin-top:14px"><div class="empty">Loading the receipt…</div></div>') : ''}`;
-}
-RENDER.decisions = viewDecisions;
+/* the Decisions section view (log, track record, record review) lives in decisions.js */
 const kvVal = v => v == null ? '—' : typeof v === 'object' ? Object.entries(v).map(([a, b]) => `${a} ${typeof b === 'object' ? JSON.stringify(b) : b}`).join(' · ') : typeof v === 'number' ? fmt(v) : String(v);
 function decisionDoc(d){
   const R = d.receipt || {}, ch = R.chosen || {}, econ = (R.constraints_checked || {}).economic || {};

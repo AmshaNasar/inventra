@@ -9,7 +9,7 @@ Inventra is an AI-assisted inventory planning workspace for GulfTrade Supplies, 
 ```bash
 make setup     # python3 -m venv .venv && pip install -r requirements.txt  (Python 3.9+)
 make demo      # API on http://127.0.0.1:8000, interactive docs at /docs
-make test      # 44 tests: section 6 formulas on the worked example, validator, keyed LLM (mocked), full demo flow
+make test      # 49 tests: section 6 formulas on the worked example, validator, keyed LLM (mocked), full demo flow
 ```
 
 ### With Docker
@@ -41,6 +41,7 @@ On first start, the app loads the seeded dataset into `runtime/inventra.duckdb`.
 | `inventra/engine.py` | Section 6: stock path, spare, need, day-by-day simulation with FIFO batches, net benefit, recommendation rule, robustness grid, input hash |
 | `inventra/candidates.py` | Option generation (single, split, naive, reorder, bring forward, reduce/delay, wait, clearance), urgency |
 | `inventra/plan.py` | Portfolio allocation (most urgent first; approvals lock spare), ranked queue, rejected list, KPIs, S8 question |
+| `inventra/outcomes.py` | Decision Log, outcome review (Hit / Right call, unlucky / Wrong call / Inconclusive), track record, suggestions applied only through the correction flow |
 | `inventra/lab.py` | Scenario Lab tabs: one decision per tab, per-tab disruption settings, simulated-path statistics (stockout probability, net-benefit range), net-benefit bridge, Breaking Point panel, Compare view, event impact, Approve / Reject / Send back |
 | `inventra/tree.py` | Earlier decision-tree API (still served; the UI now uses `/lab`) |
 | `inventra/service.py` | Global changes (corrections, signal edits), re-plan + What changed, Stale marking, approvals, audit |
@@ -97,3 +98,17 @@ On the live seeded data, the Chargers P90 band is narrower than the fixture (Dub
 - **Statistics:** stockout probability, expected lost sales and the net-benefit range come from 80 simulated demand paths. Each path draws the 30-day demand level per location from that cell's P10/P50/P90 band, and whether the delay happens. Charts, timing and breaking points use the base case.
 - **Discount:** discount scenarios are new and Lab-only. Demand rises by an **assumed** sell-through uplift while the oldest units are marked down, and the margin given up is charged. The Breaking Point panel shows the uplift needed to pay off. Net benefit now uses margin × extra units sold, which is identical to the design doc's margin × lost sales avoided whenever demand is unchanged.
 - **Approval:** Approve re-checks the decision on the shared plan (rule, robustness, input hash, one active decision per cell). Reject needs a reason. Send back needs a reason and records no decision. Approved and rejected tabs are locked; fork them to test changes.
+
+## Decision Log and track record
+- **Endpoints:** `GET /decision-log`, `GET /decision-log/{id}`, `POST /decision-log/{id}/explain`, `GET /track-record`, `POST /suggestions/{id}/review`.
+- **Two kinds of record:**
+  - Real decisions are frozen at approval and stay **Awaiting actuals**. There is no time machine, so no actuals exist for them yet.
+  - `DL-` records are **demo history** from `data/seed/demo_decision_history.json` (regenerate with `python3 generator/demo_history.py`). They are synthetic decisions with synthetic actuals, labelled demo everywhere.
+- **Computed by the server, never stored:** outcome labels, WAPE vs baseline, bias, interval coverage, assumption failures and suggestions.
+- **Label rules:**
+  - Inconclusive: a supplied distortion note exists.
+  - Right call, unlucky: a breaking point was crossed and the benefit fell short.
+  - Wrong call: the assumptions held but there was no benefit.
+  - Hit: anything else that paid off.
+- **Headline score:** none until 10 decisions are reviewed. A bias cell needs at least 2 decisions.
+- **Suggestions:** two or more under-forecasts above 5% in one category and location produce a proposal: raise safety stock by the mean under-forecast, rounded up to 5. Approving it records a normal correction (old value kept, re-plan, Stale marking). Reject and Send back need a reason and change nothing.

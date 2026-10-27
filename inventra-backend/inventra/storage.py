@@ -45,13 +45,15 @@ RUNTIME_DDL = [
         name VARCHAR, decision VARCHAR, settings VARCHAR, status VARCHAR, source VARCHAR, chat VARCHAR,
         results VARCHAR, cache_key VARCHAR, changelog VARCHAR, forked_from VARCHAR, status_reason VARCHAR,
         decision_id VARCHAR, created_at VARCHAR, updated_at VARCHAR)""",
+    """CREATE TABLE IF NOT EXISTS review_suggestions (suggestion_id VARCHAR, status VARCHAR, reason VARCHAR,
+        "user" VARCHAR, ts VARCHAR, correction_id VARCHAR, proposed INTEGER)""",
     """CREATE TABLE IF NOT EXISTS llm_cache (cache_key VARCHAR, kind VARCHAR, output VARCHAR, created_at VARCHAR)""",
     """CREATE TABLE IF NOT EXISTS llm_log (ts VARCHAR, kind VARCHAR, cache_key VARCHAR, attempts INTEGER,
         passed BOOLEAN, first_pass BOOLEAN, errors VARCHAR)""",
 ]
 
 RUNTIME_TABLES = ["loads", "corrections_log", "signal_edits", "inbox_events", "scenario_trees",
-                  "scenario_nodes", "decisions", "audit_log", "llm_cache", "llm_log", "lab_tabs"]
+                  "scenario_nodes", "decisions", "audit_log", "llm_cache", "llm_log", "lab_tabs", "review_suggestions"]
 
 
 def now_iso() -> str:

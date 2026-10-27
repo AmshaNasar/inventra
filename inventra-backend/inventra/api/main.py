@@ -27,6 +27,7 @@ from ..llm import explain as llm
 from ..replay import run as run_replay
 from ..schemas import UPLOADABLE
 from ..service import HITLError, get_service
+from .. import outcomes
 from ..lab import Lab
 from ..tree import Trees
 from ..validation import raw_duplicates, report as validation_report
@@ -591,3 +592,34 @@ def lab_compare(a: str, b: str):
 @app.get("/lab/event-impact", tags=["scenario lab tabs"])
 def lab_event_impact(sku: str, location: str):
     return ok(Lab(get_service()).event_impact(sku, location))
+
+
+# ---------------------------------------------------------------------- decision log, outcome review, track record
+class SuggestionReviewIn(Strict):
+    action: Literal["approve", "reject", "send_back"]
+    reason: Optional[str] = Reason
+
+
+@app.get("/decision-log", tags=["decision log"])
+def decision_log():
+    return ok(outcomes.log(get_service()))
+
+
+@app.get("/decision-log/{rid}", tags=["decision log"])
+def decision_log_record(rid: str):
+    return ok(outcomes.record(get_service(), rid))
+
+
+@app.post("/decision-log/{rid}/explain", tags=["decision log"])
+def decision_log_explain(rid: str):
+    return ok(outcomes.explain(get_service(), rid))
+
+
+@app.get("/track-record", tags=["decision log"])
+def track_record():
+    return ok(outcomes.track_record(get_service()))
+
+
+@app.post("/suggestions/{sid}/review", tags=["decision log"])
+def suggestion_review(sid: str, body: SuggestionReviewIn):
+    return ok(outcomes.act_on_suggestion(get_service(), sid, body.action, body.reason))

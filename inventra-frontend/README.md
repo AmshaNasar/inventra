@@ -29,7 +29,7 @@ Open **http://localhost:3000**, not 127.0.0.1:3000. The backend's default CORS s
 | Inventory Network | `GET /network/projection`, `GET /network/ageing`, `POST /drafts/po` |
 | Disruptions | `GET /signals`, `PATCH /signals/{id}`, `GET /signals/{id}/impact` |
 | Scenario Lab | `GET /lab/workspace`, `POST/GET/PATCH /lab/tabs…`, `…/fork`, `…/decision`, `…/chat`, `…/review`, `GET /lab/compare`, `GET /lab/event-impact` |
-| Decisions | `GET /decisions`, `GET /decisions/{id}`, `POST /decisions/{id}/recalculate` |
+| Decisions | `GET /decision-log`, `GET /decision-log/{id}`, `POST /decision-log/{id}/explain`, `GET /track-record`, `POST /suggestions/{id}/review`, plus `GET /decisions/{id}` and `POST /decisions/{id}/recalculate` for real receipts |
 | Evaluation | `POST /evaluation/replay`, `GET /evaluation/report` |
 | Shared | `GET /settings/mode`, `GET /freshness`, `POST /reset` |
 
@@ -66,3 +66,10 @@ Open **http://localhost:3000**, not 127.0.0.1:3000. The backend's default CORS s
   10. Approve / Reject / Send back
 - **Compare view:** a verdict, read-only setting chips per side, a mismatch warning, headline metrics with the better value in green, and charts on the same scale. You can approve either side from here.
 - **Chat:** typed what-ifs only need the backend's LLM key. Without one, the chat column shows a form instead.
+
+## Decisions section
+The section has three sub-tabs: Sandbox (jumps to the Scenario Lab), Decision Log and Track record.
+- **Decision Log:** count cards, a filterable and searchable log, and a "Frozen at approval" panel.
+- **Record view:** "Why this label", a chat that explains from the record, the expected → realised net benefit, WAPE vs baseline, the forecast interval, assumptions held or crossed, pay-off, the frozen record, and the suggested next step with Approve / Reject / Send back. Real decisions show "Awaiting actuals" and their full receipt.
+- **Track record:** interval coverage, average predicted vs realised benefit, confidence, bias by category and location, the assumptions that failed most often, and outcome-label counts.
+- **No time machine.** `DL-` rows are labelled demo history.
